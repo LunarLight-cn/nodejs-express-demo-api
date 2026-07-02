@@ -1,0 +1,107 @@
+Enum currency_type {
+  fiat
+  crypto
+}
+
+Enum order_type {
+  buy
+  sell
+}
+
+Enum order_status {
+  open
+  partial
+  completed
+  cancelled
+}
+
+Enum trade_status {
+  pending_payment
+  paid
+  completed
+  cancelled
+}
+
+Table users {
+  id int [pk, increment]
+  username varchar [unique, not null]
+  email varchar [unique, not null]
+  pass_hash varchar [not null]
+  cdate timestamp [default: `now()`]
+  udate timestamp
+}
+
+Table currencies {
+  id int [pk, increment]
+  code varchar [unique, not null]
+  type currency_type [not null]
+  decimal int [default: 2]
+  min_withdraw decimal
+  is_active boolean [default: true]
+}
+
+Table wallets {
+  id int [pk, increment]
+  owner_id int [not null, ref: > users.id]
+  crc_id int [not null, ref: > currencies.id]
+  balance decimal [default: 0]
+  balance_lck decimal [default: 0]
+  cdate timestamp [default: `now()`]
+  udate timestamp
+
+  Indexes {
+    (owner_id, crc_id) [unique]
+  }
+}
+
+Table orders {
+  id int [pk, increment]
+  user_id int [not null, ref: > users.id]
+  type order_type [not null]
+  base_crc_id int [not null, ref: > currencies.id]
+  quote_crc_id int [not null, ref: > currencies.id]
+  price decimal [not null]
+  amount decimal [not null]
+  remain_amount decimal [not null]
+  status order_status [default: 'open']
+  cdate timestamp [default: `now()`]
+  udate timestamp
+}
+
+Table trades {
+  id int [pk, increment]
+  order_id int [not null, ref: > orders.id]
+  buyer_id int [not null, ref: > users.id]
+  seller_id int [not null, ref: > users.id]
+  base_crc_id int [not null, ref: > currencies.id]
+  quote_crc_id int [not null, ref: > currencies.id]
+  price decimal [not null]
+  base_amount decimal [not null]
+  quote_amount decimal [not null]
+  status trade_status [default: 'pending_payment']
+  cdate timestamp [default: `now()`]
+  udate timestamp
+}
+
+Enum transfer_type {
+  internal
+  external
+}
+
+Enum transfer_status {
+  pending
+  completed
+  failed
+}
+
+Table transfers {
+  id int [pk, increment]
+  sender_id int [not null, ref: > users.id]
+  receiver_id int [ref: > users.id]
+  crc_id int [not null, ref: > currencies.id]
+  amount decimal [not null]
+  recipient_address varchar
+  type transfer_type [not null]
+  status transfer_status [default: 'completed']
+  cdate timestamp [default: `now()`]
+}
