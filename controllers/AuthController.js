@@ -12,6 +12,19 @@ const AuthController = {
           .status(400)
           .json({ error: "username, email, and password are required" });
       }
+
+      if (username.length < 3) {
+        return res
+          .status(400)
+          .json({ error: "Username must be at least 3 characters" });
+      }
+
+      if (password.length < 6) {
+        return res
+          .status(400)
+          .json({ error: "Password must be at least 6 characters" });
+      }
+
       // Check if user already exists
       const existing = await User.findOne({ where: { email } });
 

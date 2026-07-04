@@ -6,13 +6,13 @@ const TradeController = require("../controllers/TradeController");
 const WalletController = require("../controllers/WalletController");
 const verifyToken = require("../middleware/auth");
 
-//  Authorization
+// ===== Auth =====
 
 /**
  * @openapi
  * /api/register:
  *   post:
- *     summary: Register a new user account
+ *     summary: Register new account
  *     tags: [Auth]
  *     requestBody:
  *       required: true
@@ -22,12 +22,14 @@ const verifyToken = require("../middleware/auth");
  *             type: object
  *             required: [username, email, password]
  *             properties:
- *               username: { type: string, example: "amy" }
- *               email: { type: string, example: "EMAIL_ADDRESS" }
- *               password: { type: string, example: "PASSWORD" }
+ *               username: { type: string, example: "[NAME]" }
+ *               email: { type: string, example: "[EMAIL_ADDRESS]" }
+ *               password: { type: string, example: "[PASSWORD]" }
  *     responses:
  *       201:
  *         description: Registration successful
+ *       400:
+ *         description: Validation error (e.g. username too short, password too short)
  *       409:
  *         description: Email already registered
  */
@@ -37,7 +39,7 @@ router.post("/register", AuthController.register);
  * @openapi
  * /api/login:
  *   post:
- *     summary: Login and receive a JWT token
+ *     summary: Login to receive JWT token
  *     tags: [Auth]
  *     requestBody:
  *       required: true
@@ -47,8 +49,8 @@ router.post("/register", AuthController.register);
  *             type: object
  *             required: [email, password]
  *             properties:
- *               email: { type: string, example: "EMAIL_ADDRESS" }
- *               password: { type: string, example: "PASSWORD" }
+ *               email: { type: string, example: "[EMAIL_ADDRESS]" }
+ *               password: { type: string, example: "[PASSWORD]" }
  *     responses:
  *       200:
  *         description: Login successful, returns JWT token
@@ -57,13 +59,13 @@ router.post("/register", AuthController.register);
  */
 router.post("/login", AuthController.login);
 
-// Order
+// ===== Orders =====
 
 /**
  * @openapi
- * /api/getAllOrders:
+ * /api/orders:
  *   get:
- *     summary: Get all orders (supports filtering by type and status)
+ *     summary: Get all orders
  *     tags: [Orders]
  *     parameters:
  *       - in: query
@@ -76,13 +78,32 @@ router.post("/login", AuthController.login);
  *       200:
  *         description: List of orders
  */
-router.get("/getAllOrders", OrderController.getAllOrders);
+router.get("/orders", OrderController.getAllOrders);
 
 /**
  * @openapi
- * /api/createOrder:
+ * /api/orders/{id}:
+ *   get:
+ *     summary: Get a single order by ID
+ *     tags: [Orders]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: integer }
+ *     responses:
+ *       200:
+ *         description: Order details with user and currency info
+ *       404:
+ *         description: Order not found
+ */
+router.get("/orders/:id", OrderController.getOrderById);
+
+/**
+ * @openapi
+ * /api/orders:
  *   post:
- *     summary: Create a new buy or sell order (requires token)
+ *     summary: Create a new buy or sell order
  *     tags: [Orders]
  *     security:
  *       - bearerAuth: []
@@ -95,25 +116,50 @@ router.get("/getAllOrders", OrderController.getAllOrders);
  *             required: [type, base_crc_id, quote_crc_id, price, amount]
  *             properties:
  *               type: { type: string, enum: [buy, sell] }
- *               base_crc_id: { type: integer}
- *               quote_crc_id: { type: integer}
- *               price: { type: number}
- *               amount: { type: number}
+ *               base_crc_id: { type: integer }
+ *               quote_crc_id: { type: integer }
+ *               price: { type: number }
+ *               amount: { type: number }
  *     responses:
  *       201:
  *         description: Order created
  *       400:
  *         description: Insufficient balance or invalid input
  */
-router.post("/createOrder", verifyToken, OrderController.createOrder);
+router.post("/orders", verifyToken, OrderController.createOrder);
 
-// Trade
+/**
+ * @openapi
+ * /api/orders/{id}/cancel:
+ *   patch:
+ *     summary: Cancel an order
+ *     tags: [Orders]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: integer }
+ *     responses:
+ *       200:
+ *         description: Order cancelled, locked funds released back to available balance
+ *       400:
+ *         description: Order cannot be cancelled (already completed or cancelled)
+ *       403:
+ *         description: Not your order
+ *       404:
+ *         description: Order not found
+ */
+router.patch("/orders/:id/cancel", verifyToken, OrderController.cancelOrder);
+
+// ===== Trades =====
 
 /**
  * @openapi
  * /api/orders/{id}/trade:
  *   post:
- *     summary: Accept an order and complete the trade instantly (requires token)
+ *     summary: Accept an order and complete the trade
  *     tags: [Trades]
  *     security:
  *       - bearerAuth: []
@@ -139,25 +185,25 @@ router.post("/orders/:id/trade", verifyToken, TradeController.executeTrade);
 
 /**
  * @openapi
- * /api/getUserTrades:
+ * /api/trades:
  *   get:
- *     summary: Get all trades for the authenticated user (requires token)
+ *     summary: Get all user's trades
  *     tags: [Trades]
  *     security:
  *       - bearerAuth: []
  *     responses:
  *       200:
- *         description: List of trades
+ *         description: List of trades (as buyer or seller)
  */
-router.get("/getUserTrades", verifyToken, TradeController.getUserTrades);
+router.get("/trades", verifyToken, TradeController.getUserTrades);
 
-// Wallet 
+// ===== Wallets & Transfers =====
 
 /**
  * @openapi
- * /api/getMyWallets:
+ * /api/wallets:
  *   get:
- *     summary: Get all wallets for the authenticated user (requires token)
+ *     summary: Get all user's wallets
  *     tags: [Wallets]
  *     security:
  *       - bearerAuth: []
@@ -165,14 +211,14 @@ router.get("/getUserTrades", verifyToken, TradeController.getUserTrades);
  *       200:
  *         description: List of wallets with balances
  */
-router.get("/getMyWallets", verifyToken, WalletController.getMyWallets);
+router.get("/wallets", verifyToken, WalletController.getMyWallets);
 
 /**
  * @openapi
- * /api/transfer:
+ * /api/transfers:
  *   post:
- *     summary: Transfer coins internally or externally (requires token)
- *     tags: [Wallets]
+ *     summary: Transfer coins internally or externally
+ *     tags: [Transfers]
  *     security:
  *       - bearerAuth: []
  *     requestBody:
@@ -183,30 +229,30 @@ router.get("/getMyWallets", verifyToken, WalletController.getMyWallets);
  *             type: object
  *             required: [crc_id, amount]
  *             properties:
- *               to_username: { type: string, description: "Recipient username (internal transfer), Null if external transfer" }
- *               recipient_address: { type: string, description: "Bank or blockchain address (external transfer), Null if internal transfer" }
+ *               to_username: { type: string, description: "Recipient username (for internal transfer)" }
+ *               recipient_address: { type: string, description: "Blockchain/bank address (for external transfer)" }
  *               crc_id: { type: integer }
  *               amount: { type: number }
  *     responses:
  *       201:
  *         description: Transfer successful
  *       400:
- *         description: Insufficient balance
+ *         description: Insufficient balance or below minimum withdrawal
  */
-router.post("/transfer", verifyToken, WalletController.transfer);
+router.post("/transfers", verifyToken, WalletController.transfer);
 
 /**
  * @openapi
- * /api/getTransferHistory:
+ * /api/transfers:
  *   get:
- *     summary: Get transfer history for the authenticated user (requires token)
- *     tags: [Wallets]
+ *     summary: Get user's transfer history 
+ *     tags: [Transfers]
  *     security:
  *       - bearerAuth: []
  *     responses:
  *       200:
- *         description: List of transfers
+ *         description: List of transfers (sent and received)
  */
-router.get("/getTransferHistory", verifyToken, WalletController.getTransferHistory);
+router.get("/transfers", verifyToken, WalletController.getTransferHistory);
 
 module.exports = router;

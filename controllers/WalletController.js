@@ -1,5 +1,6 @@
 const { Wallet, Currency, Transfer, User } = require("../models");
 const sequelize = require("../config/database");
+const { Op } = require("sequelize");
 
 const WalletController = {
   // Get all wallets for the authenticated user with currency details.
@@ -8,7 +9,11 @@ const WalletController = {
       const wallets = await Wallet.findAll({
         where: { owner_id: req.user.id },
         include: [
-          { model: Currency, as: "currency", attributes: ["id", "code", "type"] },
+          {
+            model: Currency,
+            as: "currency",
+            attributes: ["id", "code", "type"],
+          },
         ],
       });
 
@@ -26,20 +31,35 @@ const WalletController = {
       const sender_id = req.user.id;
       const transferAmount = parseFloat(amount);
 
-      if (!crc_id || !transferAmount || transferAmount <= 0) {
+      if (!crc_id || isNaN(transferAmount) || transferAmount <= 0) {
         await t.rollback();
         return res.status(400).json({ error: "Invalid currency or amount" });
       }
 
       if (!to_username && !recipient_address) {
         await t.rollback();
-        return res.status(400).json({ error: "Must provide either to_username or recipient_address" });
+        return res.status(400).json({
+          error: "Must provide either to_username or recipient_address",
+        });
       }
 
       const currency = await Currency.findByPk(crc_id);
       if (!currency) {
         await t.rollback();
         return res.status(404).json({ error: "Currency not found" });
+      }
+
+      // Check minimum withdrawal for external transfers
+      if (!to_username && recipient_address) {
+        if (
+          parseFloat(currency.min_withdraw) > 0 &&
+          transferAmount < parseFloat(currency.min_withdraw)
+        ) {
+          await t.rollback();
+          return res.status(400).json({
+            error: `Minimum withdrawal for ${currency.code} is ${currency.min_withdraw}`,
+          });
+        }
       }
 
       // Check sender balance
@@ -49,7 +69,10 @@ const WalletController = {
         lock: true,
       });
 
-      if (!senderWallet || parseFloat(senderWallet.balance) < transferAmount) {
+      if (
+        !senderWallet ||
+        parseFloat(senderWallet.balance) < transferAmount
+      ) {
         await t.rollback();
         return res.status(400).json({ error: "Insufficient balance" });
       }
@@ -59,16 +82,23 @@ const WalletController = {
 
       // If internal transfer (by username)
       if (to_username) {
-        const receiver = await User.findOne({ where: { username: to_username }, transaction: t });
+        const receiver = await User.findOne({
+          where: { username: to_username },
+          transaction: t,
+        });
         if (!receiver) {
           await t.rollback();
-          return res.status(404).json({ error: "Recipient username not found" });
+          return res
+            .status(404)
+            .json({ error: "Recipient username not found" });
         }
         if (receiver.id === sender_id) {
           await t.rollback();
-          return res.status(400).json({ error: "Cannot transfer to yourself" });
+          return res
+            .status(400)
+            .json({ error: "Cannot transfer to yourself" });
         }
-        
+
         receiver_id = receiver.id;
         type = "internal";
 
@@ -78,39 +108,48 @@ const WalletController = {
           transaction: t,
           lock: true,
         });
-        
+
         // Auto-create wallet if recipient doesn't have one (though seed creates for all)
         if (receiverWallet) {
-          receiverWallet.balance = parseFloat(receiverWallet.balance) + transferAmount;
+          receiverWallet.balance =
+            parseFloat(receiverWallet.balance) + transferAmount;
           await receiverWallet.save({ transaction: t });
         } else {
-          await Wallet.create({
-            owner_id: receiver_id,
-            crc_id: crc_id,
-            balance: transferAmount,
-            balance_lck: 0
-          }, { transaction: t });
+          await Wallet.create(
+            {
+              owner_id: receiver_id,
+              crc_id: crc_id,
+              balance: transferAmount,
+              balance_lck: 0,
+            },
+            { transaction: t },
+          );
         }
       }
 
       // Deduct from sender
-      senderWallet.balance = parseFloat(senderWallet.balance) - transferAmount;
+      senderWallet.balance =
+        parseFloat(senderWallet.balance) - transferAmount;
       await senderWallet.save({ transaction: t });
 
       // Create transfer record
-      const transferRecord = await Transfer.create({
-        sender_id,
-        receiver_id,
-        crc_id,
-        amount: transferAmount,
-        recipient_address: type !== "internal" ? recipient_address : null,
-        type,
-        status: "completed" // Assuming instant completion for exam purpose
-      }, { transaction: t });
+      const transferRecord = await Transfer.create(
+        {
+          sender_id,
+          receiver_id,
+          crc_id,
+          amount: transferAmount,
+          recipient_address: type !== "internal" ? recipient_address : null,
+          type,
+          status: "completed",
+        },
+        { transaction: t },
+      );
 
       await t.commit();
-      res.status(201).json({ message: "Transfer successful", transfer: transferRecord });
-
+      res
+        .status(201)
+        .json({ message: "Transfer successful", transfer: transferRecord });
     } catch (error) {
       await t.rollback();
       res.status(500).json({ error: error.message });
@@ -120,7 +159,6 @@ const WalletController = {
   // Get transfer history
   getTransferHistory: async (req, res) => {
     try {
-      const { Op } = require("sequelize");
       const userId = req.user.id;
 
       const transfers = await Transfer.findAll({
@@ -139,7 +177,7 @@ const WalletController = {
     } catch (error) {
       res.status(500).json({ error: error.message });
     }
-  }
+  },
 };
 
 module.exports = WalletController;

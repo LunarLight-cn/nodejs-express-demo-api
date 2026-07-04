@@ -1,5 +1,6 @@
 const { Trade, Order, User, Currency, Wallet } = require("../models");
 const sequelize = require("../config/database");
+const { Op } = require("sequelize");
 
 const TradeController = {
   // Accept an order and complete the trade in one step.
@@ -29,6 +30,16 @@ const TradeController = {
         return res
           .status(400)
           .json({ error: "Cannot trade with your own order" });
+      }
+
+      // Validate amount if provided
+      if (amount !== undefined && amount !== null) {
+        if (isNaN(parseFloat(amount)) || parseFloat(amount) <= 0) {
+          await t.rollback();
+          return res
+            .status(400)
+            .json({ error: "amount must be a positive number" });
+        }
       }
 
       const tradeAmount = amount
@@ -163,7 +174,6 @@ const TradeController = {
   getUserTrades: async (req, res) => {
     try {
       const userId = req.user.id;
-      const { Op } = require("sequelize");
 
       const trades = await Trade.findAll({
         where: {
