@@ -180,11 +180,11 @@ npm run seed
 npm start
 ```
 
-The server will be running at **http://localhost:PORT**.
+The server will be running at **http://localhost:3000** (or the PORT specified in `.env`).
 
 ### API Documentation (Swagger)
 
-Open **http://localhost:PORT** in your browser to explore the interactive Swagger API docs.
+Open **http://localhost:3000** in your browser to explore the interactive Swagger API docs.
 
 ## API Endpoints
 
@@ -197,34 +197,38 @@ Open **http://localhost:PORT** in your browser to explore the interactive Swagge
 
 ### Orders (C2C)
 
-| Method | Endpoint            | Auth | Description                    |
-| ------ | ------------------- | ---- | ------------------------------ |
-| GET    | `/api/getAllOrders` | No   | List all orders (with filters) |
-| POST   | `/api/createOrder`  | Yes  | Create a new buy/sell order    |
+| Method | Endpoint                 | Auth | Description                                   |
+| ------ | ------------------------ | ---- | --------------------------------------------- |
+| GET    | `/api/orders`            | No   | List all orders (with filters)                |
+| GET    | `/api/orders/:id`        | No   | Get a single order by ID                      |
+| POST   | `/api/orders`            | Yes  | Create a new buy/sell order                   |
+| PATCH  | `/api/orders/:id/cancel` | Yes  | Cancel an order and release locked funds      |
 
 ### Trades
 
 | Method | Endpoint                | Auth | Description                                  |
 | ------ | ----------------------- | ---- | -------------------------------------------- |
-| POST   | `/api/orders/:id/trade` | Yes  | Accept an order and complete trade instantly |
-| GET    | `/api/getUserTrades`    | Yes  | Get your trade history                       |
+| POST   | `/api/orders/:id/trade` | Yes  | Accept an order and complete trade instantly  |
+| GET    | `/api/trades`           | Yes  | Get your trade history                       |
 
-### Wallets
+### Wallets & Transfers
 
-| Method | Endpoint                  | Auth | Description                        |
-| ------ | ------------------------- | ---- | ---------------------------------- |
-| GET    | `/api/getMyWallets`       | Yes  | View your wallet balances          |
-| POST   | `/api/transfer`           | Yes  | Transfer coins (internal/external) |
-| GET    | `/api/getTransferHistory` | Yes  | View your transfer history         |
+| Method | Endpoint         | Auth | Description                        |
+| ------ | ---------------- | ---- | ---------------------------------- |
+| GET    | `/api/wallets`   | Yes  | View your wallet balances          |
+| POST   | `/api/transfers` | Yes  | Transfer coins (internal/external) |
+| GET    | `/api/transfers` | Yes  | View your transfer history         |
 
 ## Trading Flow
 
 ```
-1. Register  →  POST /api/register
-2. Login     →  POST /api/login  (get JWT token)
-3. Seller creates a sell order    →  POST /api/createOrder
-4. Buyer accepts and completes    →  POST /api/orders/:id/trade
+1. Register     →  POST /api/register
+2. Login        →  POST /api/login  (get JWT token)
+3. View Orders  →  GET  /api/orders  (browse available orders)
+4. Create Order →  POST /api/orders  (create a buy or sell order)
+5. Execute Trade→  POST /api/orders/:id/trade  (accept someone's order)
    → Crypto is transferred to buyer, fiat to seller instantly
+6. Cancel Order →  PATCH /api/orders/:id/cancel  (release locked funds)
 ```
 
 ## Test Accounts (after seeding)
@@ -235,9 +239,19 @@ Open **http://localhost:PORT** in your browser to explore the interactive Swagge
 | john     | john@example.com | password123 |
 | alex     | alex@example.com | password123 |
 
+### Seeded Sample Data
+
+| Type    | Description                                                        | Status  |
+| ------- | ------------------------------------------------------------------ | ------- |
+| Order 1 | Jane sells 0.5 BTC @ 100,000 THB/BTC (0.3 traded, 0.2 remaining) | partial |
+| Order 2 | Alex buys 100 XRP @ 20 THB/XRP                                    | open    |
+| Trade 1 | John bought 0.3 BTC from Jane @ 100,000 THB/BTC = 30,000 THB     | completed |
+
+> Wallet balances in the seed are pre-calculated to reflect the state **after** these orders and trades (e.g. Jane's BTC: balance=1.5, locked=0.2).
+
 ## API Testing Walkthrough (Swagger)
 
-You can use the following step-by-step scenario to test the API via Swagger UI (`http://localhost:PORT`).
+You can use the following step-by-step scenario to test the API via Swagger UI (`http://localhost:3000`).
 
 **How to use Swagger UI:**
 
@@ -265,12 +279,12 @@ You can use the following step-by-step scenario to test the API via Swagger UI (
 
 **2. Check Balances**
 
-- **API**: `GET /api/getMyWallets`
-- **Result**: You should see Jane's balances (e.g., 500000 THB, 5000 USD).
+- **API**: `GET /api/wallets`
+- **Result**: You should see Jane's balances (e.g., 530,000 THB, 1.5 BTC available + 0.2 BTC locked).
 
 **3. Internal Transfer (Send to a friend)**
 
-- **API**: `POST /api/transfer`
+- **API**: `POST /api/transfers`
 - **Body**:
   ```json
   {
@@ -280,11 +294,11 @@ You can use the following step-by-step scenario to test the API via Swagger UI (
     "amount": 5000
   }
   ```
-- **Result**: Jane's THB balance is deducted by 5000, and transferred to John.
+- **Result**: Jane's THB balance is deducted by 5,000, and transferred to John.
 
 **4. External Transfer (Withdrawal)**
 
-- **API**: `POST /api/transfer`
+- **API**: `POST /api/transfers`
 - **Body**:
   ```json
   {
@@ -294,14 +308,14 @@ You can use the following step-by-step scenario to test the API via Swagger UI (
     "amount": 0.1
   }
   ```
-- **Result**: 0.1 BTC is withdrawn to the external address.
+- **Result**: 0.1 BTC is withdrawn to the external address. (Note: amount must meet the minimum withdrawal of 0.0001 BTC)
 
 ### Phase 3: C2C Trading
 
 **5. Create a Sell Order**
 
-- **API**: `POST /api/createOrder`
-- **Scenario**: Jane wants to sell 0.5 BTC at 150000 THB/BTC.
+- **API**: `POST /api/orders`
+- **Scenario**: Jane wants to sell 0.5 BTC at 150,000 THB/BTC.
 - **Body**:
   ```json
   {
@@ -314,13 +328,19 @@ You can use the following step-by-step scenario to test the API via Swagger UI (
   ```
 - **Result**: Order is created. 0.5 BTC is moved to `balance_lck` in Jane's wallet.
 
-**6. View the Order**
+**6. View Orders**
 
-- **API**: `GET /api/getAllOrders`
+- **API**: `GET /api/orders`
 - **Parameters**: `type = sell`, `status = open`
-- **Result**: Take note of the `id` of the order you just created (e.g., `id: 1`).
+- **Result**: Take note of the `id` of the order you just created.
 
-**7. Execute Trade (Matching)**
+**7. View Order Detail**
+
+- **API**: `GET /api/orders/{id}`
+- **Parameters**: `id` = (the ID from step 6)
+- **Result**: Detailed view of the order with user and currency info.
+
+**8. Execute Trade (Matching)**
 
 - **Action**: **Logout** from Swagger (🔓). Login again (`POST /api/login`) using John's credentials (`john@example.com` / `password123`). Authorize with John's token (🔒).
 - **API**: `POST /api/orders/{id}/trade`
@@ -329,24 +349,41 @@ You can use the following step-by-step scenario to test the API via Swagger UI (
   ```json
   { "amount": 0.5 }
   ```
-- **Result**: Trade successful. 75000 THB is deducted from John and sent to Jane. 0.5 BTC is unlocked and sent to John.
+- **Result**: Trade successful. 75,000 THB is deducted from John and sent to Jane. 0.5 BTC is unlocked and sent to John.
+
+### Phase 4: Cancel Order
+
+**9. Create and Cancel an Order**
+
+- **API**: `POST /api/orders`
+- **Body**:
+  ```json
+  {
+    "type": "buy",
+    "base_crc_id": 4,
+    "quote_crc_id": 1,
+    "price": 5000,
+    "amount": 2
+  }
+  ```
+- **Result**: Buy order for 2 ETH created. 10,000 THB (2 × 5,000) is locked.
+
+- **API**: `PATCH /api/orders/{id}/cancel`
+- **Parameters**: `id` = (the order ID from above)
+- **Result**: Order is cancelled. 10,000 THB is released back to available balance.
 
 ## Project Structure
 
 ```
 CryptoBackendExam/
-├── app.js                  # Express app entry point
+├── app.js                  # Express app entry point + Swagger setup
 ├── config/
 │   └── database.js         # Sequelize + SQLite configuration
 ├── controllers/
-│   ├── AuthController.js   # Register & Login
-│   ├── OrderController.js  # C2C order management
-│   ├── TradeController.js  # Trade execution
-│   └── WalletController.js # Wallet balance queries
-├── ERDiagram/              # ER Diagram and Database Schema
-│   ├── ERD.md              # Documentation with Mermaid diagram
-│   ├── ERDiagram.png       # Visual diagram image
-│   └── schema.dbml         # DBML code for dbdiagram.io (for better visualization)
+│   ├── AuthController.js   # Register & Login (with input validation)
+│   ├── OrderController.js  # Create, list, detail, and cancel orders
+│   ├── TradeController.js  # Trade execution (accept orders)
+│   └── WalletController.js # Wallet queries, transfers (with min_withdraw check)
 ├── middleware/
 │   └── auth.js             # JWT verification middleware
 ├── models/
@@ -358,10 +395,12 @@ CryptoBackendExam/
 │   ├── Trade.js
 │   └── Transfer.js
 ├── routes/
-│   └── api.js              # API route definitions + Swagger docs
+│   └── api.js              # RESTful API route definitions + Swagger docs
 ├── seeders/
-│   └── seed.js             # Database seed script
-├── .env                    # Environment variables
+│   └── seed.js             # Database seed script (users, currencies, orders, trades)
+├── ERDiagram.dbml          # DBML code for dbdiagram.io
+├── ERDiagram.png           # Visual ER diagram image
+├── .env.example            # Environment variables template
 ├── .gitignore
 ├── package.json
 └── README.md
