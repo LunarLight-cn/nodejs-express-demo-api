@@ -105,3 +105,21 @@ Table transfers {
   status transfer_status [default: 'completed']
   cdate timestamp [default: `now()`]
 }
+
+Table idempotency_keys {
+  id int [pk, increment]
+  user_id int [not null, ref: > users.id]
+  key varchar [not null]
+  endpoint varchar [not null]
+  request_hash varchar [not null]
+  status varchar [default: 'processing']
+  response_code int
+  response_body text
+  expires_at timestamp
+  cdate timestamp [default: `now()`]
+  udate timestamp
+
+  Indexes {
+    (user_id, key) [unique]
+  }
+}

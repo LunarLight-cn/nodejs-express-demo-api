@@ -42,28 +42,7 @@ Users can buy and sell cryptocurrencies (BTC, ETH, XRP, DOGE) using fiat currenc
 
 ## ER Diagram
 
-### 1. Visual Diagram (from Lucidchart)
-
-![ER Diagram Image](ERDiagram.png)
-
-#### Database Design Rationale:
-- **`users`**: Stores only authentication data. Keeping balances out of the `users` table prevents unnecessary row locks during trades and simplifies auditing.
-- **`currencies`**: Support both fiat and crypto uniformly. The `is_active` flag allows temporarily disabling a currency for maintenance without deleting records.
-- **`wallets` (Multi-currency support)**: Structured as "1 wallet per user per currency" using a unique constraint on `(owner_id, crc_id)`. 
-  - **`balance` vs `balance_lck`**: A critical design choice. When a user places an order, funds are moved from `balance` (available) to `balance_lck` (reserved) to prevent double-spending before the order is matched or cancelled.
-- **`orders`**: Represents the user's "intent" to trade. Uses separate `base_crc_id` and `quote_crc_id` to dynamically support any trading pair (e.g., BTC/THB) without creating separate tables per pair. 
-  - **Partial Fills**: The `remain_amount` field ensures that an order can be partially bought (e.g., selling 1 BTC, but someone only buys 0.3 BTC) instead of an unrealistic all-or-nothing constraint.
-- **`trades`**: Represents the actual execution. A strict 1-to-Many relationship with `orders` (due to partial fills). 
-  - **Denormalization for Performance**: Fields like `buyer_id`, `seller_id`, and currencies are duplicated here. This slight trade-off in normalization vastly improves read-heavy queries for trade histories without needing complex JOINs.
-- **`transfers`**: Strictly isolated from trading logic. Represents direct money movement (no matching/pricing). 
-  - **Internal vs. External**: The nullable `receiver_id` handles internal P2P transfers, while `recipient_address` handles external blockchain/bank withdrawals within the same table.
-- **Enums for Data Integrity**: Database-level enums (`order_status`, `trade_status`) tightly enforce the state machine, preventing invalid statuses that could negatively impact a user's funds.
-
-### 2. DBML Code for dbdiagram.io
-
-You can copy and paste the contents of the [`ERDiagram.dbml`](./ERDiagram.dbml) file in this directory into [dbdiagram.io](https://dbdiagram.io) to generate or edit the visual diagram (for better visualization and interactivity).
-
-### 3. Mermaid Diagram
+### 1. Mermaid Diagram
 
 View the ER Diagram via Mermaid directly on GitHub:
 
@@ -75,6 +54,7 @@ erDiagram
     users ||--o{ trades : "sells"
     users ||--o{ transfers : "sends"
     users |o--o{ transfers : "receives"
+    users ||--o{ idempotency_keys : "has many"
     currencies ||--o{ wallets : "has many"
     orders ||--o{ trades : "has many"
     currencies ||--o{ orders : "base currency"
@@ -151,7 +131,40 @@ erDiagram
         enum status "pending, completed, failed"
         timestamp cdate
     }
+
+    idempotency_keys {
+        int id PK
+        int user_id FK
+        varchar key
+        varchar endpoint
+        varchar request_hash
+        varchar status
+        int response_code
+        text response_body
+        timestamp expires_at
+        timestamp cdate
+        timestamp udate
+    }
 ```
+
+### 2. DBML Code for dbdiagram.io
+
+You can copy and paste the contents of the [`ERDiagram.dbml`](./ERDiagram.dbml) file in this directory into [dbdiagram.io](https://dbdiagram.io) to generate or edit the visual diagram (for interactive visualization).
+
+#### Database Design Rationale:
+- **`users`**: Stores only authentication data. Keeping balances out of the `users` table prevents unnecessary row locks during trades and simplifies auditing.
+- **`currencies`**: Support both fiat and crypto uniformly. The `is_active` flag allows temporarily disabling a currency for maintenance without deleting records.
+- **`wallets` (Multi-currency support)**: Structured as "1 wallet per user per currency" using a unique constraint on `(owner_id, crc_id)`. 
+  - **`balance` vs `balance_lck`**: A critical design choice. When a user places an order, funds are moved from `balance` (available) to `balance_lck` (reserved) to prevent double-spending before the order is matched or cancelled.
+- **`orders`**: Represents the user's "intent" to trade. Uses separate `base_crc_id` and `quote_crc_id` to dynamically support any trading pair (e.g., BTC/THB) without creating separate tables per pair. 
+  - **Partial Fills**: The `remain_amount` field ensures that an order can be partially bought (e.g., selling 1 BTC, but someone only buys 0.3 BTC) instead of an unrealistic all-or-nothing constraint.
+- **`trades`**: Represents the actual execution. A strict 1-to-Many relationship with `orders` (due to partial fills). 
+  - **Denormalization for Performance**: Fields like `buyer_id`, `seller_id`, and currencies are duplicated here. This slight trade-off in normalization vastly improves read-heavy queries for trade histories without needing complex JOINs.
+- **`transfers`**: Strictly isolated from trading logic. Represents direct money movement (no matching/pricing). 
+  - **Internal vs. External**: The nullable `receiver_id` handles internal P2P transfers, while `recipient_address` handles external blockchain/bank withdrawals within the same table.
+- **Enums for Data Integrity**: Database-level enums (`order_status`, `trade_status`) tightly enforce the state machine, preventing invalid statuses that could negatively impact a user's funds.
+- **`idempotency_keys` (Double-Order & Idempotency Protection)**: Prevents accidental duplicate submissions (rapid double clicks, network retries) and race conditions during order placement and matching. Supports both explicit `X-Idempotency-Key` headers (persisted with 24h TTL) and automated rapid debounce guards.
+- **Pessimistic Locking & Arbitrary Precision**: All order execution, cancellation, and wallet balance operations use row-level pessimistic locking (`SELECT ... FOR UPDATE` via `lock: true`) with ACID database transactions, computed using `bignumber.js` to eliminate JavaScript floating-point rounding errors.
 
 ## Setup & Run
 
@@ -385,7 +398,8 @@ CryptoBackendExam/
 │   ├── TradeController.js  # Trade execution (accept orders)
 │   └── WalletController.js # Wallet queries, transfers (with min_withdraw check)
 ├── middleware/
-│   └── auth.js             # JWT verification middleware
+│   ├── auth.js             # JWT verification middleware
+│   └── idempotency.js      # Double-order & idempotency protection middleware
 ├── models/
 │   ├── index.js            # Model associations (relationships)
 │   ├── User.js
@@ -393,13 +407,17 @@ CryptoBackendExam/
 │   ├── Wallet.js
 │   ├── Order.js
 │   ├── Trade.js
-│   └── Transfer.js
+│   ├── Transfer.js
+│   └── IdempotencyKey.js   # Idempotency key persistence model
 ├── routes/
 │   └── api.js              # RESTful API route definitions + Swagger docs
 ├── seeders/
 │   └── seed.js             # Database seed script (users, currencies, orders, trades)
+├── tests/
+│   └── api.test.js         # Comprehensive automated API test suite (27 tests)
+├── utils/
+│   └── decimal.js          # High-precision BigNumber decimal arithmetic
 ├── ERDiagram.dbml          # DBML code for dbdiagram.io
-├── ERDiagram.png           # Visual ER diagram image
 ├── .env.example            # Environment variables template
 ├── .gitignore
 ├── package.json
