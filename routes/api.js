@@ -5,6 +5,7 @@ const OrderController = require("../controllers/OrderController");
 const TradeController = require("../controllers/TradeController");
 const WalletController = require("../controllers/WalletController");
 const verifyToken = require("../middleware/auth");
+const idempotency = require("../middleware/idempotency");
 
 // ===== Auth =====
 
@@ -107,6 +108,13 @@ router.get("/orders/:id", OrderController.getOrderById);
  *     tags: [Orders]
  *     security:
  *       - bearerAuth: []
+ *     parameters:
+ *       - in: header
+ *         name: X-Idempotency-Key
+ *         required: false
+ *         schema:
+ *           type: string
+ *         description: Optional unique idempotency key to prevent double submission
  *     requestBody:
  *       required: true
  *       content:
@@ -125,8 +133,12 @@ router.get("/orders/:id", OrderController.getOrderById);
  *         description: Order created
  *       400:
  *         description: Insufficient balance or invalid input
+ *       409:
+ *         description: Concurrent or duplicate request in progress
+ *       429:
+ *         description: Duplicate submission detected
  */
-router.post("/orders", verifyToken, OrderController.createOrder);
+router.post("/orders", verifyToken, idempotency(), OrderController.createOrder);
 
 /**
  * @openapi
@@ -168,6 +180,12 @@ router.patch("/orders/:id/cancel", verifyToken, OrderController.cancelOrder);
  *         name: id
  *         required: true
  *         schema: { type: integer }
+ *       - in: header
+ *         name: X-Idempotency-Key
+ *         required: false
+ *         schema:
+ *           type: string
+ *         description: Optional unique idempotency key to prevent double trade execution
  *     requestBody:
  *       content:
  *         application/json:
@@ -180,8 +198,15 @@ router.patch("/orders/:id/cancel", verifyToken, OrderController.cancelOrder);
  *         description: Trade completed, funds exchanged
  *       400:
  *         description: Insufficient balance or order unavailable
+ *       409:
+ *         description: Concurrent request in progress
  */
-router.post("/orders/:id/trade", verifyToken, TradeController.executeTrade);
+router.post(
+  "/orders/:id/trade",
+  verifyToken,
+  idempotency(),
+  TradeController.executeTrade
+);
 
 /**
  * @openapi
@@ -221,6 +246,13 @@ router.get("/wallets", verifyToken, WalletController.getMyWallets);
  *     tags: [Transfers]
  *     security:
  *       - bearerAuth: []
+ *     parameters:
+ *       - in: header
+ *         name: X-Idempotency-Key
+ *         required: false
+ *         schema:
+ *           type: string
+ *         description: Optional unique idempotency key to prevent double transfer
  *     requestBody:
  *       required: true
  *       content:
@@ -238,8 +270,10 @@ router.get("/wallets", verifyToken, WalletController.getMyWallets);
  *         description: Transfer successful
  *       400:
  *         description: Insufficient balance or below minimum withdrawal
+ *       409:
+ *         description: Concurrent request in progress
  */
-router.post("/transfers", verifyToken, WalletController.transfer);
+router.post("/transfers", verifyToken, idempotency(), WalletController.transfer);
 
 /**
  * @openapi

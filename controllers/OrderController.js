@@ -1,5 +1,6 @@
 const { Order, User, Currency, Wallet } = require("../models");
 const sequelize = require("../config/database");
+const DecimalUtil = require("../utils/decimal");
 
 const OrderController = {
   // Get all orders with user and currency details.
@@ -86,24 +87,21 @@ const OrderController = {
           .json({ error: "type must be 'buy' or 'sell'" });
       }
 
-      const parsedPrice = parseFloat(price);
-      const parsedAmount = parseFloat(amount);
-
-      if (isNaN(parsedPrice) || parsedPrice <= 0) {
+      if (!DecimalUtil.isPositive(price)) {
         await t.rollback();
         return res
           .status(400)
           .json({ error: "price must be a positive number" });
       }
 
-      if (isNaN(parsedAmount) || parsedAmount <= 0) {
+      if (!DecimalUtil.isPositive(amount)) {
         await t.rollback();
         return res
           .status(400)
           .json({ error: "amount must be a positive number" });
       }
 
-      if (base_crc_id === quote_crc_id) {
+      if (parseInt(base_crc_id, 10) === parseInt(quote_crc_id, 10)) {
         await t.rollback();
         return res
           .status(400)
@@ -126,7 +124,9 @@ const OrderController = {
       // Determine which wallet to lock funds from
       const lockCrcId = type === "sell" ? base_crc_id : quote_crc_id;
       const lockAmount =
-        type === "sell" ? parsedAmount : parsedPrice * parsedAmount;
+        type === "sell"
+          ? String(amount)
+          : DecimalUtil.times(price, amount);
 
       const wallet = await Wallet.findOne({
         where: { owner_id: user_id, crc_id: lockCrcId },
@@ -134,14 +134,14 @@ const OrderController = {
         lock: true,
       });
 
-      if (!wallet || parseFloat(wallet.balance) < lockAmount) {
+      if (!wallet || DecimalUtil.isLessThan(wallet.balance, lockAmount)) {
         await t.rollback();
         return res.status(400).json({ error: "Insufficient balance" });
       }
 
-      // Lock funds
-      wallet.balance = parseFloat(wallet.balance) - lockAmount;
-      wallet.balance_lck = parseFloat(wallet.balance_lck) + lockAmount;
+      // Lock funds atomically using precise decimal operations
+      wallet.balance = DecimalUtil.minus(wallet.balance, lockAmount);
+      wallet.balance_lck = DecimalUtil.plus(wallet.balance_lck, lockAmount);
       await wallet.save({ transaction: t });
 
       // Create the order
@@ -151,9 +151,9 @@ const OrderController = {
           type,
           base_crc_id,
           quote_crc_id,
-          price: parsedPrice,
-          amount: parsedAmount,
-          remain_amount: parsedAmount,
+          price: String(price),
+          amount: String(amount),
+          remain_amount: String(amount),
           status: "open",
         },
         { transaction: t },
@@ -203,8 +203,8 @@ const OrderController = {
         order.type === "sell" ? order.base_crc_id : order.quote_crc_id;
       const lockAmount =
         order.type === "sell"
-          ? parseFloat(order.remain_amount)
-          : parseFloat(order.remain_amount) * parseFloat(order.price);
+          ? String(order.remain_amount)
+          : DecimalUtil.times(order.remain_amount, order.price);
 
       // Release locked funds back to available balance
       const wallet = await Wallet.findOne({
@@ -213,8 +213,15 @@ const OrderController = {
         lock: true,
       });
 
-      wallet.balance = parseFloat(wallet.balance) + lockAmount;
-      wallet.balance_lck = parseFloat(wallet.balance_lck) - lockAmount;
+      if (!wallet || DecimalUtil.isLessThan(wallet.balance_lck, lockAmount)) {
+        await t.rollback();
+        return res
+          .status(400)
+          .json({ error: "Insufficient locked funds to release" });
+      }
+
+      wallet.balance = DecimalUtil.plus(wallet.balance, lockAmount);
+      wallet.balance_lck = DecimalUtil.minus(wallet.balance_lck, lockAmount);
       await wallet.save({ transaction: t });
 
       // Update order status

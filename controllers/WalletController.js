@@ -1,6 +1,7 @@
 const { Wallet, Currency, Transfer, User } = require("../models");
 const sequelize = require("../config/database");
 const { Op } = require("sequelize");
+const DecimalUtil = require("../utils/decimal");
 
 const WalletController = {
   // Get all wallets for the authenticated user with currency details.
@@ -29,9 +30,8 @@ const WalletController = {
     try {
       const { to_username, recipient_address, crc_id, amount } = req.body;
       const sender_id = req.user.id;
-      const transferAmount = parseFloat(amount);
 
-      if (!crc_id || isNaN(transferAmount) || transferAmount <= 0) {
+      if (!crc_id || !DecimalUtil.isPositive(amount)) {
         await t.rollback();
         return res.status(400).json({ error: "Invalid currency or amount" });
       }
@@ -52,8 +52,8 @@ const WalletController = {
       // Check minimum withdrawal for external transfers
       if (!to_username && recipient_address) {
         if (
-          parseFloat(currency.min_withdraw) > 0 &&
-          transferAmount < parseFloat(currency.min_withdraw)
+          DecimalUtil.isPositive(currency.min_withdraw) &&
+          DecimalUtil.isLessThan(amount, currency.min_withdraw)
         ) {
           await t.rollback();
           return res.status(400).json({
@@ -71,7 +71,7 @@ const WalletController = {
 
       if (
         !senderWallet ||
-        parseFloat(senderWallet.balance) < transferAmount
+        DecimalUtil.isLessThan(senderWallet.balance, amount)
       ) {
         await t.rollback();
         return res.status(400).json({ error: "Insufficient balance" });
@@ -111,16 +111,18 @@ const WalletController = {
 
         // Auto-create wallet if recipient doesn't have one (though seed creates for all)
         if (receiverWallet) {
-          receiverWallet.balance =
-            parseFloat(receiverWallet.balance) + transferAmount;
+          receiverWallet.balance = DecimalUtil.plus(
+            receiverWallet.balance,
+            amount,
+          );
           await receiverWallet.save({ transaction: t });
         } else {
           await Wallet.create(
             {
               owner_id: receiver_id,
               crc_id: crc_id,
-              balance: transferAmount,
-              balance_lck: 0,
+              balance: String(amount),
+              balance_lck: "0",
             },
             { transaction: t },
           );
@@ -128,8 +130,7 @@ const WalletController = {
       }
 
       // Deduct from sender
-      senderWallet.balance =
-        parseFloat(senderWallet.balance) - transferAmount;
+      senderWallet.balance = DecimalUtil.minus(senderWallet.balance, amount);
       await senderWallet.save({ transaction: t });
 
       // Create transfer record
@@ -138,7 +139,7 @@ const WalletController = {
           sender_id,
           receiver_id,
           crc_id,
-          amount: transferAmount,
+          amount: String(amount),
           recipient_address: type !== "internal" ? recipient_address : null,
           type,
           status: "completed",

@@ -1,6 +1,7 @@
 const { Trade, Order, User, Currency, Wallet } = require("../models");
 const sequelize = require("../config/database");
 const { Op } = require("sequelize");
+const DecimalUtil = require("../utils/decimal");
 
 const TradeController = {
   // Accept an order and complete the trade in one step.
@@ -9,9 +10,13 @@ const TradeController = {
     const t = await sequelize.transaction();
     try {
       const acceptingUserId = req.user.id;
-      const { amount } = req.body;
+      const { amount } = req.body || {};
 
-      const order = await Order.findByPk(req.params.id, { transaction: t });
+      // Lock the order row to prevent concurrent double execution (over-fill race condition)
+      const order = await Order.findByPk(req.params.id, {
+        transaction: t,
+        lock: true,
+      });
 
       if (!order) {
         await t.rollback();
@@ -32,9 +37,16 @@ const TradeController = {
           .json({ error: "Cannot trade with your own order" });
       }
 
+      if (DecimalUtil.isLessThanOrEqualTo(order.remain_amount, 0)) {
+        await t.rollback();
+        return res
+          .status(400)
+          .json({ error: "Order is already completely filled" });
+      }
+
       // Validate amount if provided
       if (amount !== undefined && amount !== null) {
-        if (isNaN(parseFloat(amount)) || parseFloat(amount) <= 0) {
+        if (!DecimalUtil.isPositive(amount)) {
           await t.rollback();
           return res
             .status(400)
@@ -43,15 +55,15 @@ const TradeController = {
       }
 
       const tradeAmount = amount
-        ? Math.min(parseFloat(amount), parseFloat(order.remain_amount))
-        : parseFloat(order.remain_amount);
+        ? DecimalUtil.min(amount, order.remain_amount)
+        : String(order.remain_amount);
 
-      if (tradeAmount <= 0) {
+      if (!DecimalUtil.isPositive(tradeAmount)) {
         await t.rollback();
         return res.status(400).json({ error: "Invalid trade amount" });
       }
 
-      const quoteAmount = tradeAmount * parseFloat(order.price);
+      const quoteAmount = DecimalUtil.times(tradeAmount, order.price);
 
       // Determine buyer and seller based on order type
       const buyerId = order.type === "sell" ? acceptingUserId : order.user_id;
@@ -67,13 +79,15 @@ const TradeController = {
         });
         if (
           !buyerQuoteWallet ||
-          parseFloat(buyerQuoteWallet.balance) < quoteAmount
+          DecimalUtil.isLessThan(buyerQuoteWallet.balance, quoteAmount)
         ) {
           await t.rollback();
           return res.status(400).json({ error: "Insufficient balance to buy" });
         }
-        buyerQuoteWallet.balance =
-          parseFloat(buyerQuoteWallet.balance) - quoteAmount;
+        buyerQuoteWallet.balance = DecimalUtil.minus(
+          buyerQuoteWallet.balance,
+          quoteAmount,
+        );
         await buyerQuoteWallet.save({ transaction: t });
       } else {
         // Accepting user is the seller
@@ -84,15 +98,17 @@ const TradeController = {
         });
         if (
           !sellerBaseWallet ||
-          parseFloat(sellerBaseWallet.balance) < tradeAmount
+          DecimalUtil.isLessThan(sellerBaseWallet.balance, tradeAmount)
         ) {
           await t.rollback();
           return res
             .status(400)
             .json({ error: "Insufficient balance to sell" });
         }
-        sellerBaseWallet.balance =
-          parseFloat(sellerBaseWallet.balance) - tradeAmount;
+        sellerBaseWallet.balance = DecimalUtil.minus(
+          sellerBaseWallet.balance,
+          tradeAmount,
+        );
         await sellerBaseWallet.save({ transaction: t });
       }
 
@@ -103,10 +119,22 @@ const TradeController = {
         transaction: t,
         lock: true,
       });
+
       if (sellerId === order.user_id) {
-        // Order creator is the seller
-        sellerBaseLockWallet.balance_lck =
-          parseFloat(sellerBaseLockWallet.balance_lck) - tradeAmount;
+        // Order creator is the seller: debit locked balance
+        if (
+          !sellerBaseLockWallet ||
+          DecimalUtil.isLessThan(sellerBaseLockWallet.balance_lck, tradeAmount)
+        ) {
+          await t.rollback();
+          return res
+            .status(400)
+            .json({ error: "Insufficient locked funds in seller wallet" });
+        }
+        sellerBaseLockWallet.balance_lck = DecimalUtil.minus(
+          sellerBaseLockWallet.balance_lck,
+          tradeAmount,
+        );
         await sellerBaseLockWallet.save({ transaction: t });
       }
 
@@ -115,20 +143,33 @@ const TradeController = {
         transaction: t,
         lock: true,
       });
-      buyerBaseWallet.balance =
-        parseFloat(buyerBaseWallet.balance) + tradeAmount;
+      buyerBaseWallet.balance = DecimalUtil.plus(
+        buyerBaseWallet.balance,
+        tradeAmount,
+      );
       await buyerBaseWallet.save({ transaction: t });
 
       // Transfer quote currency : buyer → seller
       if (buyerId === order.user_id) {
-        // Order creator is the buyer
+        // Order creator is the buyer: debit locked quote balance
         const buyerQuoteLockWallet = await Wallet.findOne({
           where: { owner_id: buyerId, crc_id: order.quote_crc_id },
           transaction: t,
           lock: true,
         });
-        buyerQuoteLockWallet.balance_lck =
-          parseFloat(buyerQuoteLockWallet.balance_lck) - quoteAmount;
+        if (
+          !buyerQuoteLockWallet ||
+          DecimalUtil.isLessThan(buyerQuoteLockWallet.balance_lck, quoteAmount)
+        ) {
+          await t.rollback();
+          return res
+            .status(400)
+            .json({ error: "Insufficient locked funds in buyer wallet" });
+        }
+        buyerQuoteLockWallet.balance_lck = DecimalUtil.minus(
+          buyerQuoteLockWallet.balance_lck,
+          quoteAmount,
+        );
         await buyerQuoteLockWallet.save({ transaction: t });
       }
 
@@ -137,8 +178,10 @@ const TradeController = {
         transaction: t,
         lock: true,
       });
-      sellerQuoteWallet.balance =
-        parseFloat(sellerQuoteWallet.balance) + quoteAmount;
+      sellerQuoteWallet.balance = DecimalUtil.plus(
+        sellerQuoteWallet.balance,
+        quoteAmount,
+      );
       await sellerQuoteWallet.save({ transaction: t });
 
       // Create trade record
@@ -149,7 +192,7 @@ const TradeController = {
           seller_id: sellerId,
           base_crc_id: order.base_crc_id,
           quote_crc_id: order.quote_crc_id,
-          price: order.price,
+          price: String(order.price),
           base_amount: tradeAmount,
           quote_amount: quoteAmount,
           status: "completed",
@@ -157,9 +200,13 @@ const TradeController = {
         { transaction: t },
       );
 
-      // Update order remaining amount
-      order.remain_amount = parseFloat(order.remain_amount) - tradeAmount;
-      order.status = order.remain_amount <= 0 ? "completed" : "partial";
+      // Update order remaining amount atomically
+      const newRemainAmount = DecimalUtil.minus(
+        order.remain_amount,
+        tradeAmount,
+      );
+      order.remain_amount = newRemainAmount;
+      order.status = DecimalUtil.isZero(newRemainAmount) ? "completed" : "partial";
       await order.save({ transaction: t });
 
       await t.commit();
